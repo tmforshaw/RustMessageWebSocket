@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Messaging App</title>
+</head>
+
+<body>
+  <h1>Messaging App Written In Rust</h1>
+
+  <div id="messages"></div>
+
+  <input id="input" />
+
+  <script>
+    const ws = new WebSocket("ws://127.0.0.1:4321");
+
+    ws.onopen = () => add_message("WebSocket connected");
+    ws.onmessage = (e) => add_message("Received: " + e.data);
+    ws.onclose = () => add_message("WebSocket disconnected");
+
+    function send(message) {
+      ws.send(message);
+      add_message("Sent: " + message);
+    }
+
+    function add_message(msg) {
+      let messages = document.getElementById("messages");
+
+      let new_message = document.createElement("div");
+      new_message.className = "message";
+      new_message.innerText = msg;
+
+      messages.appendChild(new_message);
+    }
+
+
+    let input = document.getElementById("input");
+    input.addEventListener(
+      "keydown", (ev) => {
+        if (ev.key === "Enter") {
+          // Get data from input box, then clear it
+          let data = input.value;
+          input.value = "";
+
+          send(data);
+        }
+      });
+
+  </script>
+</body>
+
+</html>
