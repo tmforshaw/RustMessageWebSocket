@@ -47,11 +47,13 @@ async fn start_websocket(mut shutdown: broadcast::Receiver<()>) {
     let clients = Arc::new(Mutex::new(vec![]));
     let client_names = Arc::new(Mutex::new(vec![]));
 
+    let messages = Arc::new(Mutex::new(vec![]));
+
     loop {
         tokio::select! {
             // Listen for new connections, then handle that connection
             Ok((stream, _)) = listener.accept() => {
-                tokio::spawn(handle_connection(stream, clients.clone(), client_names.clone()));
+                tokio::spawn(handle_connection(stream, clients.clone(), client_names.clone(), messages.clone()));
             },
             // If shutdown receives a message, stop the socket from running
             _ = shutdown.recv() => {
@@ -66,6 +68,7 @@ async fn handle_connection(
     stream: TcpStream,
     clients: Arc<Mutex<Vec<(usize, Tx)>>>,
     client_names: Arc<Mutex<Vec<(usize, String)>>>,
+    messages: Arc<Mutex<Vec<(usize, Message)>>>,
 ) {
     // Get handles for the websocket, sending and receiving
     let ws_stream = accept_async(stream).await.unwrap();
@@ -94,6 +97,20 @@ async fn handle_connection(
         client_name
     };
 
+    // Send new client the chat history
+    {
+        let messages_guard = messages.lock().unwrap();
+        for (from_id, message) in messages_guard.iter() {
+            let m = format_message_to_client(
+                *from_id,
+                message.clone().to_string(),
+                client_names.clone(),
+            )
+            .unwrap();
+            tx.send(m).unwrap();
+        }
+    }
+
     // Add the client's sender to clients Vec
     let client_index = {
         let mut clients_guard = clients.lock().unwrap();
@@ -112,12 +129,6 @@ async fn handle_connection(
         }
         println!("New web socket connection [{client_index} {client_name}]");
 
-        // Broadcast that the client has joined
-        for client in clients_guard.iter() {
-            let m = Message::Text(format!("[{client_name}] Joined the chat").into());
-            let _ = client.1.send(m);
-        }
-
         // Add client's mpsc sender to client list
         clients_guard.push((client_index, tx.clone()));
 
@@ -126,6 +137,25 @@ async fn handle_connection(
             let mut names_guard = client_names.lock().unwrap();
 
             names_guard.push((client_index, client_name.clone()));
+        }
+
+        // Broadcast that the client has joined
+        let m = format_message_to_client(
+            client_index,
+            "Joined the chat".to_string(),
+            client_names.clone(),
+        )
+        .unwrap();
+        for client in clients_guard.iter() {
+            if client.0 != client_index {
+                let _ = client.1.send(m.clone());
+            }
+        }
+
+        // Add message to messages Vec
+        {
+            let mut messages_guard = messages.lock().unwrap();
+            messages_guard.push((client_index, Message::from("Joined the chat"))); // TODO duplicated code
         }
 
         client_index
@@ -145,13 +175,30 @@ async fn handle_connection(
         if message.is_text() || message.is_binary() {
             println!("Recieved Message [{client_index} {client_name}]: {message:?}");
 
-            let clients_guard = clients.lock().unwrap();
-            for client in clients_guard.iter() {
-                // Don't broadcast the message to your own client
-                if client.0 != client_index {
-                    let m = Message::Text(format!("[{client_name}] {message}").into());
-                    let _ = client.1.send(m);
+            // Message to broadcast
+            let m = format_message_to_client(
+                client_index,
+                message.clone().to_string(),
+                client_names.clone(),
+            )
+            .unwrap();
+
+            // Broadcast message to all clients
+            {
+                let clients_guard = clients.lock().unwrap();
+                for client in clients_guard.iter() {
+                    // Don't broadcast the message to your own client
+                    if client.0 != client_index {
+                        // let m = Message::Text(format!("[{client_name}] {message}").into());
+                        client.1.send(m.clone()).unwrap();
+                    }
                 }
+            }
+
+            // Add message to messages Vec
+            {
+                let mut messages_guard = messages.lock().unwrap();
+                messages_guard.push((client_index, message));
             }
         }
     }
@@ -160,6 +207,14 @@ async fn handle_connection(
 
     // Stop sending to client since connection has ended
     send_task.abort();
+
+    // Message to broadcast client leaving
+    let m = format_message_to_client(
+        client_index,
+        "Left the chat".to_string(),
+        client_names.clone(),
+    )
+    .unwrap();
 
     // Remove the tx from the clients list
     {
@@ -176,10 +231,42 @@ async fn handle_connection(
 
         // Broadcast that the client has left
         for client in clients_guard.iter() {
-            let m = Message::Text(format!("[{client_name}] Left the chat").into());
-            let _ = client.1.send(m);
+            let _ = client.1.send(m.clone());
         }
     }
+
+    // Add message to messages Vec
+    {
+        let mut messages_guard = messages.lock().unwrap();
+        messages_guard.push((client_index, m));
+    }
+}
+
+fn format_message_to_client(
+    from_id: usize,
+    message: String,
+    client_names: Arc<Mutex<Vec<(usize, String)>>>,
+) -> Option<Message> {
+    // Get the name from the ID
+    let from_name = {
+        let names_guard = client_names.lock().unwrap();
+        names_guard.iter().find_map(|(i, name)| {
+            if *i == from_id {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+    };
+
+    let from_name = if let Some(from_name) = from_name {
+        from_name
+    } else {
+        format!("{{{from_id}}}")
+    };
+
+    // Format message
+    Some(Message::Text(format!("[{from_name}] {message}").into()))
 }
 
 const NAME_ADJECTIVES: &[&str] = &[
