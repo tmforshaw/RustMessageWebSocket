@@ -637,6 +637,7 @@ name = "messaging"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "rand 0.9.1",
  "rocket",
  "serde",
  "tokio",
