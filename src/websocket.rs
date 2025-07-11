@@ -61,7 +61,7 @@ async fn start_websocket(mut shutdown: broadcast::Receiver<()>) {
     }
 }
 
-async fn handle_connection(stream: TcpStream, clients: Arc<Mutex<Vec<Tx>>>) {
+async fn handle_connection(stream: TcpStream, clients: Arc<Mutex<Vec<(usize, Tx)>>>) {
     // Get handles for the websocket, sending and receiving
     let ws_stream = accept_async(stream).await.unwrap();
     let (mut ws_write, mut ws_read) = ws_stream.split();
@@ -73,18 +73,28 @@ async fn handle_connection(stream: TcpStream, clients: Arc<Mutex<Vec<Tx>>>) {
     let client_index = {
         let mut clients_guard = clients.lock().unwrap();
 
-        // Get the index of this client
-        let client_index = clients_guard.len();
+        // Get the index of this client, choosing the lowest available ID
+        let mut client_index = clients_guard.len();
+        for (i, &client_idx) in clients_guard
+            .iter()
+            .map(|(client_idx, _)| client_idx)
+            .enumerate()
+        {
+            // Client ID not the same as what it should be, means that the index it should be is free
+            if client_idx != i {
+                client_index = i
+            }
+        }
         println!("New web socket connection [{client_index}]");
 
         // Broadcast that the client has joined
         for client in clients_guard.iter() {
             let m = Message::Text(format!("[{client_index}] Joined the chat").into());
-            let _ = client.send(m);
+            let _ = client.1.send(m);
         }
 
         // Add client's mpsc sender to client list
-        clients_guard.push(tx.clone());
+        clients_guard.push((client_index, tx.clone()));
 
         client_index
     };
@@ -104,11 +114,11 @@ async fn handle_connection(stream: TcpStream, clients: Arc<Mutex<Vec<Tx>>>) {
             println!("Recieved Message [{client_index}]: {message:?}");
 
             let clients_guard = clients.lock().unwrap();
-            for (i, client) in clients_guard.iter().enumerate() {
+            for client in clients_guard.iter() {
                 // Don't broadcast the message to your own client
-                if i != client_index {
+                if client.0 != client_index {
                     let m = Message::Text(format!("[{client_index}] {message}").into());
-                    let _ = client.send(m);
+                    let _ = client.1.send(m);
                 }
             }
         }
@@ -128,7 +138,7 @@ async fn handle_connection(stream: TcpStream, clients: Arc<Mutex<Vec<Tx>>>) {
         // Broadcast that the client has left
         for client in clients_guard.iter() {
             let m = Message::Text(format!("[{client_index}] Left the chat").into());
-            let _ = client.send(m);
+            let _ = client.1.send(m);
         }
     }
 }

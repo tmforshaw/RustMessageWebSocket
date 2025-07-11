@@ -1,14 +1,9 @@
-extern crate rocket;
-
 use rocket::fs::{FileServer, relative};
 use tokio::task;
 
 use crate::websocket::start_websocket_listen_shutdown;
 
 mod websocket;
-
-// TODO Bug where if client who is lower down on list than you leaves, you receive your own messages
-// Put client ID monitoring back in
 
 // Launch webpage using rocket socket, mounting the static folder as the root of the webpage
 async fn launch_rocket() {
