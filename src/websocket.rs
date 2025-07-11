@@ -35,7 +35,7 @@ pub async fn start_websocket_listen_shutdown() {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 }
 
-pub async fn start_websocket(mut shutdown: broadcast::Receiver<()>) {
+async fn start_websocket(mut shutdown: broadcast::Receiver<()>) {
     // Begin websocket on specified IP and Port
     let listener = TcpListener::bind(WEBSOCKET_IP_AND_PORT.clone())
         .await
@@ -77,6 +77,12 @@ async fn handle_connection(stream: TcpStream, clients: Arc<Mutex<Vec<Tx>>>) {
         let client_index = clients_guard.len();
         println!("New web socket connection [{client_index}]");
 
+        // Broadcast that the client has joined
+        for client in clients_guard.iter() {
+            let m = Message::Text(format!("[{client_index}] Joined the chat").into());
+            let _ = client.send(m);
+        }
+
         // Add client's mpsc sender to client list
         clients_guard.push(tx.clone());
 
@@ -115,8 +121,14 @@ async fn handle_connection(stream: TcpStream, clients: Arc<Mutex<Vec<Tx>>>) {
 
     // Remove the tx from the clients list
     {
-        let mut client_guard = clients.lock().unwrap();
+        let mut clients_guard = clients.lock().unwrap();
 
-        client_guard.remove(client_index);
+        clients_guard.remove(client_index);
+
+        // Broadcast that the client has left
+        for client in clients_guard.iter() {
+            let m = Message::Text(format!("[{client_index}] Left the chat").into());
+            let _ = client.send(m);
+        }
     }
 }
